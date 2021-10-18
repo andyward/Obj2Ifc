@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Obj2Ifc": {
+      "commandName": "Project",
+      "commandLineArgs": "-o E:\\Temp\\AlonLevy\\20210805-nz1_model.obj"
+    }
+  }
+}
