@@ -1,6 +1,7 @@
 ﻿using FileFormatWavefront.Model;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xbim.Common;
@@ -21,13 +22,25 @@ namespace Obj2Ifc
 {
     public class Obj2IfcBuilder
     {
-        private IList<Scene> _scenes = new List<Scene>();
+        private IList<Source> _sources = new List<Source>();
 
-        public int SceneCount { get => _scenes.Count;  }
+        public int SceneCount { get => _sources.Count;  }
 
-        public void AddObjScene(Scene scene)
+        public void AddObjScene(Source scene)
         {
-            _scenes.Add(scene);
+            _sources.Add(scene);
+        }
+
+        public class Source
+        {
+            public Scene Scene;
+            public FileInfo SourceFile;
+
+            public Source(Scene model, FileInfo f)
+            {
+                Scene = model;
+                SourceFile = f;
+            }
         }
 
         public string CreateIfcModel(Options opts)
@@ -37,9 +50,13 @@ namespace Obj2Ifc
             {
                 if (model != null)
                 {
-                    IfcBuilding building = CreateBuilding(model, opts);
+                    IfcSpatialStructureElement container = opts.SimplifySpatial
+                        ? CreateBuilding(model, opts)
+                        : CreateStoreyHierarchy(model, opts) as IfcSpatialStructureElement;
+
+
                     IList<IfcProduct> products = new List<IfcProduct>();
-                    foreach (var scene in _scenes)
+                    foreach (var scene in _sources)
                     {
                         var sceneProducts = CreateProducts(model, scene, opts);
                         foreach(var product in sceneProducts)
@@ -52,14 +69,27 @@ namespace Obj2Ifc
                     {
                         foreach(var product in products)
                         {
-                            building.AddElement(product);
+                            container.AddElement(product);
                         }
                         txn.Commit();
                     }
 
-                    var ifcFile = string.IsNullOrEmpty(opts.IfcFile) ? Path.ChangeExtension(opts.ObjFiles.First(), "ifczip") : opts.IfcFile;
+                    var ifcFile = string.IsNullOrEmpty(opts.IfcFile) ? Path.ChangeExtension(opts.ObjFiles.First(), "ifc") : opts.IfcFile;
+
+                    var format = StorageType.Ifc;
+                    switch (Path.GetExtension(ifcFile).ToLowerInvariant())
+                    {
+                        case "ifczip":
+                            format = StorageType.IfcZip;
+                            break;
+                        case "ifcxml":
+                            format = StorageType.IfcXml;
+                            break;
+                        default:
+                            break;
+                    }
                     //write the Ifc File
-                    model.SaveAs(ifcFile, StorageType.IfcZip);
+                    model.SaveAs(ifcFile, format);
 
                     return ifcFile;
 
@@ -73,27 +103,25 @@ namespace Obj2Ifc
 
         }
 
-        private IEnumerable<IfcProduct> CreateProducts(IfcStore model, Scene scene, Options opts)
+        private IEnumerable<IfcProduct> CreateProducts(IfcStore model, Source source, Options opts)
         {
             using (var txn = model.BeginTransaction("Create Product"))
             {
                 var product = model.Instances.New<IfcBuildingElementProxy>();
-                product.Name = scene.ObjectName ?? "Obj Object";
+                product.Name = source.Scene.ObjectName ?? // obj name in scene prevails if defined
+                    (opts.UseObjFileName ? Path.GetFileNameWithoutExtension(source.SourceFile.FullName) : "Obj Object"); // if option is set, adopt file name
                 IfcGeometricRepresentationItem geometry;
                 string representationType;
 
                 switch (opts.GeometryMode)
                 {
                     case GeometryMode.TriangulatedFaceSet:
-                        geometry = CreateTriangulatedFaceSet(model, scene);
+                        geometry = CreateTriangulatedFaceSet(model, source.Scene);
                         representationType = "Tessellation";
                         break;
-                        
-
 
                     default:
                         throw new NotImplementedException($"Geometry mode not implemented {opts.GeometryMode}");
-                        
                 }
 
 
@@ -118,19 +146,16 @@ namespace Obj2Ifc
                 var lp = model.Instances.New<IfcLocalPlacement>();
                 var ax3D = model.Instances.New<IfcAxis2Placement3D>();
                 ax3D.Location = origin;
-                ax3D.RefDirection = model.Instances.New<IfcDirection>();
-                ax3D.RefDirection.SetXYZ(0, 1, 0);
                 ax3D.Axis = model.Instances.New<IfcDirection>();
-                ax3D.Axis.SetXYZ(0, 0, 1);
+                ax3D.Axis.SetXYZ(0, 0, 1); // axis is z direction
+                ax3D.RefDirection = model.Instances.New<IfcDirection>();
+                ax3D.RefDirection.SetXYZ(1, 0, 0); // ref-direction is along x
                 lp.RelativePlacement = ax3D;
                 product.ObjectPlacement = lp;
-
-                // AddPropertiesToProduct(model, product);
 
                 txn.Commit();
                 return new IfcProduct[] { product };
             }
-
         }
 
         private static IfcTriangulatedFaceSet CreateTriangulatedFaceSet(IfcStore model, Scene scene)
@@ -145,7 +170,11 @@ namespace Obj2Ifc
             int i = 0;
             foreach (var vertex in scene.Vertices)
             {
-                var ifcVertex = new[] { new IfcLengthMeasure(vertex.x), new IfcLengthMeasure(vertex.z), new IfcLengthMeasure(vertex.y) };
+                var ifcVertex = new[] { 
+                    new IfcLengthMeasure(vertex.x), 
+                    new IfcLengthMeasure(vertex.y), 
+                    new IfcLengthMeasure(vertex.z) 
+                };
                 coords.CoordList.GetAt(i).AddRange(ifcVertex);
                 i++;
             }
@@ -163,8 +192,6 @@ namespace Obj2Ifc
 
         private IfcStore InitialiseIfcModel(Options opts)
         {
-            
-
             //first we need to set up some credentials for ownership of data in the new model
             var credentials = new XbimEditorCredentials
             {
@@ -177,23 +204,78 @@ namespace Obj2Ifc
                 EditorsOrganisationName = "xbim Ltd"
             };
             //now we can create an IfcStore, it is in Ifc4 format and will be held in memory rather than in a database
-      
 
             var model = IfcStore.Create(credentials, XbimSchemaVersion.Ifc4, XbimStoreType.InMemoryModel);
 
             //Begin a transaction as all changes to a model are ACID
             using (var txn = model.BeginTransaction("Initialise Model"))
             {
-
                 //create a project
                 var project = model.Instances.New<IfcProject>();
                 //set the units to SI (mm and metres)
                 project.Initialize(ProjectUnits.SIUnitsUK);
+                if (opts.LenghtUnit != LenghtUnits.MilliMeters)
+                    SetUnits(project, opts.LenghtUnit);
+             
                 project.Name = opts.ProjectName ?? "Default Project";
                 //now commit the changes, else they will be rolled back at the end of the scope of the using statement
                 txn.Commit();
             }
             return model;
+        }
+
+        private void SetUnits(IfcProject project, LenghtUnits lenghtUnit)
+        {
+            var t = project.UnitsInContext;
+            switch (lenghtUnit)
+            {
+                case LenghtUnits.MilliMeters:
+                    break;
+                case LenghtUnits.Meters:
+                    t.SetOrChangeSiUnit(IfcUnitEnum.LENGTHUNIT, IfcSIUnitName.METRE, null);
+                    break;
+                default:
+                    throw new InvalidDataException($"Invalid lenght unit: {lenghtUnit}");
+            }
+        }
+
+        private IfcBuildingStorey CreateStoreyHierarchy(IfcStore model, Options opts)
+        {
+            using (var txn = model.BeginTransaction("Create structure"))
+            {
+                var site = model.Instances.New<IfcSite>();
+                site.Name = opts.SiteName ?? "Default Site";
+                site.ObjectPlacement = MakePlacement(model, 0, 0, 0);
+
+                var building = model.Instances.New<IfcBuilding>();
+                building.Name = opts.BuildingName ?? "Default Building";
+                building.CompositionType = IfcElementCompositionEnum.ELEMENT;
+                building.ObjectPlacement = MakePlacement(model, 0, 0, 0);
+
+                var storey = model.Instances.New<IfcBuildingStorey>();
+                storey.Name = opts.StoreyName ?? "Default Storey";
+                storey.ObjectPlacement = MakePlacement(model, 0, 0, 0);
+
+
+                //get the project there should only be one and it should exist
+                var project = model.Instances.OfType<IfcProject>().FirstOrDefault();
+
+                project?.AddSite(site);
+                site.AddBuilding(building);
+                building.AddToSpatialDecomposition(storey);
+
+                txn.Commit();
+                return storey;
+            }
+        }
+
+        private static IfcLocalPlacement MakePlacement(IfcStore model, double x, double y, double z)
+        {
+            var localPlacement = model.Instances.New<IfcLocalPlacement>();
+            var placement = model.Instances.New<IfcAxis2Placement3D>();
+            localPlacement.RelativePlacement = placement;
+            placement.Location = model.Instances.New<IfcCartesianPoint>(p => p.SetXYZ(x, y, z));
+            return localPlacement;
         }
 
         private IfcBuilding CreateBuilding(IfcStore model, Options opts)

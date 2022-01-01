@@ -2,7 +2,7 @@
   "profiles": {
     "Obj2Ifc": {
       "commandName": "Project",
-      "commandLineArgs": "-o E:\\Temp\\AlonLevy\\20210805-nz1_model.obj"
+      "commandLineArgs": "-f -o C:\\Data\\Dev\\XbimPrivate\\IdanSoft\\Obj2Ifc\\Data\\tetraXoffset.obj "
     }
   }
 }
