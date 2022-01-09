@@ -180,7 +180,7 @@ namespace Obj2Ifc
             }
 
             i = 0;
-            foreach (var face in scene.UngroupedFaces)
+            foreach (var face in GetAllFaces(scene))
             {
                 var indices = face.Indices.Select(v => new IfcPositiveInteger(v.vertex + 1));
                 faceSet.CoordIndex.GetAt(i).AddRange(indices);
@@ -188,6 +188,17 @@ namespace Obj2Ifc
             }
 
             return faceSet;
+        }
+
+        private static IEnumerable<Face> GetAllFaces(Scene scene)
+        {
+            var t = scene.UngroupedFaces.ToList();
+            foreach (var grp in scene.Groups)
+            {
+                if (grp.Faces != null)
+                    t.AddRange(grp.Faces);
+            }
+            return t;
         }
 
         private IfcStore InitialiseIfcModel(Options opts)
