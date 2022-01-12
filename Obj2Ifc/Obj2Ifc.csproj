@@ -15,10 +15,4 @@
     <Folder Include="Data\" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Update="Data\OBJ1.obj">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
 </Project>

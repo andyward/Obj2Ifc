@@ -4,6 +4,7 @@ using FileFormatWavefront.Model;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using static Obj2Ifc.Obj2IfcBuilder;
 
 namespace Obj2Ifc
 {
@@ -23,10 +24,13 @@ namespace Obj2Ifc
             {
                 if (File.Exists(objfile))
                 {
+                    FileInfo f = new FileInfo(objfile);
                     Console.WriteLine($"Opening Obj File: ${objfile}");
                     var objFile = OpenObJFile(objfile, opts.LoadTextures);
+
+                    Source s = new Source(objFile.Model, f);
+                    builder.AddObjScene(s);
                     
-                    builder.AddObjScene(objFile.Model);
                 }
                 else
                 {
